@@ -1,0 +1,306 @@
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Large File Uploader</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+    }
+    .upload-container {
+      border: 2px dashed #ccc;
+      padding: 20px;
+      text-align: center;
+      margin-bottom: 20px;
+      border-radius: 5px;
+    }
+    .upload-container.highlight {
+      border-color: #3498db;
+      background-color: #f7f9fa;
+    }
+    .progress-container {
+      margin-top: 20px;
+    }
+    .progress-bar {
+      height: 20px;
+      background-color: #e0e0e0;
+      border-radius: 10px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background-color: #3498db;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+    .file-list {
+      margin-top: 30px;
+    }
+    .file-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px;
+      border-bottom: 1px solid #eee;
+    }
+    .hidden {
+      display: none;
+    }
+    .upload-status {
+      margin-top: 10px;
+      font-weight: bold;
+    }
+    .error {
+      color: #e74c3c;
+    }
+    .success {
+      color: #27ae60;
+    }
+  </style>
+</head>
+<body>
+  <h1>Large File Uploader</h1>
+  
+  <div class="upload-container" id="drop-area">
+    <p>Drag & drop files here or click to select</p>
+    <input type="file" id="file-input" class="hidden">
+    <button id="select-button">Select File</button>
+    
+    <div class="progress-container hidden" id="progress-container">
+      <div class="progress-bar">
+        <div class="progress-bar-fill" id="progress-bar-fill"></div>
+      </div>
+      <div id="progress-text">0%</div>
+      <div class="upload-status" id="upload-status"></div>
+    </div>
+  </div>
+  
+  <div class="file-list">
+    <h2>Uploaded Files</h2>
+    <div id="file-list-container">
+      Loading...
+    </div>
+  </div>
+
+  <script>
+    // DOM elements
+    const dropArea = document.getElementById('drop-area');
+    const fileInput = document.getElementById('file-input');
+    const selectButton = document.getElementById('select-button');
+    const progressContainer = document.getElementById('progress-container');
+    const progressBarFill = document.getElementById('progress-bar-fill');
+    const progressText = document.getElementById('progress-text');
+    const uploadStatus = document.getElementById('upload-status');
+    const fileListContainer = document.getElementById('file-list-container');
+    
+    // Current upload ID for progress tracking
+    let currentUploadId = null;
+    let progressCheckInterval = null;
+    
+    // Add event listeners
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+      dropArea.addEventListener(eventName, preventDefaults, false);
+    });
+    
+    function preventDefaults(e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropArea.addEventListener(eventName, highlight, false);
+    });
+    
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropArea.addEventListener(eventName, unhighlight, false);
+    });
+    
+    function highlight() {
+      dropArea.classList.add('highlight');
+    }
+    
+    function unhighlight() {
+      dropArea.classList.remove('highlight');
+    }
+    
+    // Handle file drop
+    dropArea.addEventListener('drop', handleDrop, false);
+    
+    function handleDrop(e) {
+      const dt = e.dataTransfer;
+      const files = dt.files;
+      
+      if (files.length > 0) {
+        handleFiles(files[0]);
+      }
+    }
+    
+    // Handle file selection via button
+    selectButton.addEventListener('click', () => {
+      fileInput.click();
+    });
+    
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        handleFiles(e.target.files[0]);
+      }
+    });
+    
+    // Upload the file with progress tracking
+    function handleFiles(file) {
+      uploadFile(file);
+      resetProgress();
+      progressContainer.classList.remove('hidden');
+    }
+    
+    function resetProgress() {
+      progressBarFill.style.width = '0%';
+      progressText.textContent = '0%';
+      uploadStatus.textContent = 'Starting upload...';
+      uploadStatus.className = 'upload-status';
+      
+      // Clear any existing progress check interval
+      if (progressCheckInterval) {
+        clearInterval(progressCheckInterval);
+      }
+    }
+    
+    function uploadFile(file) {
+      // Show basic file info immediately
+      uploadStatus.textContent = `Uploading ${file.name} (${formatFileSize(file.size)})`;
+      
+      // Set up FormData
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      // Create and configure XMLHttpRequest
+      const xhr = new XMLHttpRequest();
+      
+      // Use streams for upload to handle very large files efficiently
+      xhr.open('POST', '/upload', true);
+      
+      // Initial progress updates from XMLHttpRequest
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percentComplete = Math.floor((event.loaded / event.total) * 100);
+          updateProgress(percentComplete);
+        }
+      };
+      
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          const response = JSON.parse(xhr.responseText);
+          currentUploadId = response.uploadId;
+          
+          // Set final progress
+          updateProgress(100);
+          uploadStatus.textContent = `Upload complete: ${response.filename} (${formatFileSize(response.size)})`;
+          uploadStatus.className = 'upload-status success';
+          
+          // Stop progress checking
+          if (progressCheckInterval) {
+            clearInterval(progressCheckInterval);
+          }
+          
+          // Refresh file list
+          loadFileList();
+        } else {
+          uploadStatus.textContent = `Upload failed: ${xhr.statusText}`;
+          uploadStatus.className = 'upload-status error';
+        }
+      };
+      
+      xhr.onerror = function() {
+        uploadStatus.textContent = 'Upload failed: Network error';
+        uploadStatus.className = 'upload-status error';
+      };
+      
+      // Send the file
+      xhr.send(formData);
+      
+      // Start checking progress from server
+      currentUploadId = Date.now().toString();
+      startProgressChecking();
+    }
+    
+    function startProgressChecking() {
+      // Check progress every 1 second
+      progressCheckInterval = setInterval(() => {
+        if (currentUploadId) {
+          fetch(`/progress/${currentUploadId}`)
+            .then(response => response.json())
+            .then(data => {
+              updateProgress(data.progress);
+              
+              // If upload is complete, stop checking
+              if (data.progress >= 100) {
+                clearInterval(progressCheckInterval);
+              }
+            })
+            .catch(error => {
+              console.error('Error checking progress:', error);
+            });
+        }
+      }, 1000);
+    }
+    
+    function updateProgress(percent) {
+      progressBarFill.style.width = `${percent}%`;
+      progressText.textContent = `${percent}%`;
+    }
+    
+    // Format file size in human-readable format
+    function formatFileSize(bytes) {
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let size = bytes;
+      let unitIndex = 0;
+      
+      while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex++;
+      }
+      
+      return `${size.toFixed(2)} ${units[unitIndex]}`;
+    }
+    
+    // Load list of uploaded files
+    function loadFileList() {
+      fetch('/files')
+        .then(response => response.json())
+        .then(files => {
+          if (files.length === 0) {
+            fileListContainer.innerHTML = '<p>No files uploaded yet.</p>';
+            return;
+          }
+          
+          let html = '';
+          files.forEach(file => {
+            html += `
+              <div class="file-item">
+                <div>${file.name}</div>
+                <div>${formatFileSize(file.size)}</div>
+              </div>
+            `;
+          });
+          
+          fileListContainer.innerHTML = html;
+        })
+        .catch(error => {
+          console.error('Error loading file list:', error);
+          fileListContainer.innerHTML = '<p class="error">Error loading file list</p>';
+        });
+    }
+    
+    // Initial load of file list
+    loadFileList();
+  </script>
+</body>
+</html>
